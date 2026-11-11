@@ -1,45 +1,79 @@
-# Backend FastAPI entry point
-
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Query, status
+from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Optional
-from . import models, crud, database
+from sqlalchemy.ext.asyncio import AsyncSession
+from . import models, schemas, crud, database
 
-app = FastAPI(title="Book Tracker API")
+app = FastAPI(title="Personal Book Tracker API")
+
+# Enable CORS for Next.js frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.on_event("startup")
 async def startup():
-    # Create tables if they don't exist
+    # Automatically creates PostgreSQL tables on startup if they don't exist
     async with database.engine.begin() as conn:
         await conn.run_sync(models.Base.metadata.create_all)
 
-@app.post("/books/", response_model=models.Book)
-async def create_book(book: models.Book, db: database.AsyncSession = Depends(database.get_db)):
-    return await crud.create_book(db, title=book.title, author=book.author,
-                                 status=book.status, rating=book.rating)
+@app.get("/")
+def read_root():
+    return {
+        "message": "Welcome to Personal Book Tracker API! 📚",
+        "docs": "Visit /docs for the interactive Swagger API documentation",
+        "endpoints": {
+            "list_books": "GET /books/",
+            "create_book": "POST /books/",
+            "get_book": "GET /books/{id}",
+            "update_book": "PUT /books/{id}",
+            "delete_book": "DELETE /books/{id}"
+        }
+    }
 
-@app.get("/books/", response_model=List[models.Book])
-async def list_books(status: Optional[models.BookStatus] = None,
-                     skip: int = 0, limit: int = 100,
-                     db: database.AsyncSession = Depends(database.get_db)):
-    return await crud.get_books(db, skip=skip, limit=limit, status=status)
+@app.post("/books/", response_model=schemas.BookResponse, status_code=status.HTTP_201_CREATED)
+async def create_book(book: schemas.BookCreate, db: AsyncSession = Depends(database.get_db)):
+    """Create a new book in the reading list."""
+    return await crud.create_book(db, book)
 
-@app.get("/books/{book_id}", response_model=models.Book)
-async def read_book(book_id: int, db: database.AsyncSession = Depends(database.get_db)):
+@app.get("/books/", response_model=List[schemas.BookResponse])
+async def list_books(
+    status: Optional[models.BookStatus] = Query(None, description="Filter by status (want_to_read, reading, finished)"),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=100),
+    db: AsyncSession = Depends(database.get_db)
+):
+    """List books with optional status filtering and sorting by creation date."""
+    return await crud.get_books(db, status=status, skip=skip, limit=limit)
+
+@app.get("/books/{book_id}", response_model=schemas.BookResponse)
+async def read_book(book_id: int, db: AsyncSession = Depends(database.get_db)):
+    """Get a single book by ID."""
     book = await crud.get_book(db, book_id)
     if not book:
         raise HTTPException(status_code=404, detail="Book not found")
     return book
 
-@app.put("/books/{book_id}", response_model=models.Book)
-async def update_book(book_id: int, payload: models.Book, db: database.AsyncSession = Depends(database.get_db)):
-    return await crud.update_book(db, book_id,
-                                  title=payload.title,
-                                  author=payload.author,
-                                  status=payload.status,
-                                  rating=payload.rating)
+@app.put("/books/{book_id}", response_model=schemas.BookResponse)
+async def update_book(
+    book_id: int, 
+    payload: schemas.BookUpdate, 
+    db: AsyncSession = Depends(database.get_db)
+):
+    """Update a book's status, rating, or details."""
+    updated = await crud.update_book(db, book_id, payload)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Book not found")
+    return updated
 
-@app.delete("/books/{book_id}")
-async def delete_book(book_id: int, db: database.AsyncSession = Depends(database.get_db)):
-    await crud.delete_book(db, book_id)
-    return {"ok": True}
-
+@app.delete("/books/{book_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_book(book_id: int, db: AsyncSession = Depends(database.get_db)):
+    """Delete a book from the tracker."""
+    deleted = await crud.delete_book(db, book_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Book not found")
+    return None

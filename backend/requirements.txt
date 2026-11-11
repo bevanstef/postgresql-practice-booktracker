@@ -1,7 +1,7 @@
 fastapi[all]
 uvicorn[standard]
-SQLAlchemy>=2.0
+SQLAlchemy[asyncio]>=2.0
+greenlet
 asyncpg
 python-dotenv
 pydantic
-
